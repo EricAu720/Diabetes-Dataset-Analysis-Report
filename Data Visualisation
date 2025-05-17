@@ -1,0 +1,199 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
+import base64
+from io import BytesIO
+import os
+
+# Load the dataset
+df = pd.read_csv('/Users/ericccccc/Downloads/diabetes_data.csv')
+
+# Map Age categories to meaningful labels (based on BRFSS dataset)
+age_mapping = {
+    1: '18-24', 2: '25-29', 3: '30-34', 4: '35-39', 5: '40-44',
+    6: '45-49', 7: '50-54', 8: '55-59', 9: '60-64', 10: '65-69',
+    11: '70-74', 12: '75-79', 13: '80+'
+}
+df['Age_Label'] = df['Age'].map(age_mapping)
+
+# Set plot style for static plots
+sns.set(style="whitegrid")
+
+# Create a directory to save static plots
+if not os.path.exists('plots'):
+    os.makedirs('plots')
+
+# List to store plot paths and descriptions
+plots = []
+
+# Debug: Check BMI column
+print("BMI Column Info:")
+print(df['BMI'].describe())
+if df['BMI'].isnull().sum() > 0:
+    print(f"Warning: {df['BMI'].isnull().sum()} NaN values in BMI column. Filling with median.")
+    df['BMI'] = df['BMI'].fillna(df['BMI'].median())
+if df['BMI'].empty or df['BMI'].dtype not in ['int64', 'float64']:
+    print("Error: BMI column is empty or not numeric. Please check the dataset.")
+    df['BMI'] = df['BMI'].astype(float)  # Force numeric conversion if possible
+
+# Additional debug: Check unique values
+print(f"Unique BMI values: {len(df['BMI'].unique())}")
+if len(df['BMI'].unique()) <= 1:
+    print("Warning: BMI has no variation (all values are the same). Distribution plot may fail.")
+
+# 1. Univariate Analysis: Diabetes Prevalence (Pie Chart, Static)
+plt.figure(figsize=(8, 6))
+df['Diabetes'].value_counts().plot.pie(labels=['No', 'Yes'], autopct='%1.1f%%', colors=['#66b3ff', '#ff9999'])
+plt.title('Diabetes Prevalence')
+plt.ylabel('')
+plt.savefig('plots/diabetes_prevalence.png', dpi=300, bbox_inches='tight')
+plt.close()
+plots.append(('plots/diabetes_prevalence.png "width=800"', 'Pie chart showing the proportion of diabetic vs. non-diabetic individuals.'))
+
+# 2. Univariate Analysis: BMI Distribution (Histogram with KDE, Interactive)
+# Using px.histogram with a manually added KDE for reliability
+fig = px.histogram(df, x='BMI', nbins=50, histnorm='probability density', title='BMI Distribution (Histogram with KDE)')
+fig.update_traces(marker_color='#66b3ff', opacity=0.7)
+
+# Compute KDE using seaborn for better reliability
+kde = sns.kdeplot(df['BMI'].dropna(), bw_adjust=0.5)
+kde_x = kde.get_lines()[0].get_xdata()
+kde_y = kde.get_lines()[0].get_ydata()
+plt.close()  # Close the temporary seaborn plot
+
+# Add KDE as a scatter trace
+fig.add_trace(go.Scatter(x=kde_x, y=kde_y, mode='lines', name='KDE', line=dict(color='green', width=2)))
+
+# Update layout with dynamic y-axis range
+max_density = np.max(kde_y) if len(kde_y) > 0 else 0.01
+fig.update_layout(
+    width=800,
+    height=500,
+    xaxis_title='BMI',
+    yaxis_title='Density',
+    xaxis_range=[0, 100],
+    yaxis_range=[0, max_density * 1.2],
+    bargap=0.1,
+    showlegend=True
+)
+fig.write_html('plots/bmi_distribution.html')
+plots.append(('plots/bmi_distribution.html', 'Interactive histogram with KDE overlay for BMI distribution.'))
+
+# 3. Bivariate Analysis: HighBP vs. Diabetes (Stacked Bar Chart, Static)
+plt.figure(figsize=(8, 6))
+cross_tab = pd.crosstab(df['HighBP'], df['Diabetes'], normalize='index') * 100
+cross_tab.plot(kind='bar', stacked=True, color=['#66b3ff', '#ff9999'])
+plt.title('High Blood Pressure vs. Diabetes')
+plt.xlabel('High Blood Pressure (0 = No, 1 = Yes)')
+plt.ylabel('Percentage')
+plt.legend(title='Diabetes', labels=['No', 'Yes'])
+plt.savefig('plots/highbp_vs_diabetes.png', dpi=300, bbox_inches='tight')
+plt.close()
+plots.append(('plots/highbp_vs_diabetes.png "width=800"', 'Stacked bar chart showing the percentage of diabetic individuals by high blood pressure status.'))
+
+# 4. Bivariate Analysis: BMI by Diabetes Status (Violin Plot, Interactive)
+fig = go.Figure()
+for diabetes in [0, 1]:
+    fig.add_trace(go.Violin(x=df['Diabetes'][df['Diabetes'] == diabetes],
+                            y=df['BMI'][df['Diabetes'] == diabetes],
+                            name=['No', 'Yes'][diabetes],
+                            box_visible=True, meanline_visible=True, opacity=0.6))
+fig.update_layout(title='BMI by Diabetes Status', width=800, height=500,
+                  xaxis_title='Diabetes (0 = No, 1 = Yes)', yaxis_title='BMI', yaxis_range=[10, 60])
+fig.write_html('plots/bmi_by_diabetes.html')
+plots.append(('plots/bmi_by_diabetes.html', 'Interactive violin plot comparing BMI distributions for diabetic and non-diabetic individuals.'))
+
+# 5. Correlation Heatmap (Static)
+plt.figure(figsize=(12, 8))
+corr = df.corr(numeric_only=True)
+sns.heatmap(corr, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
+plt.title('Correlation Matrix')
+plt.savefig('plots/correlation_heatmap.png', dpi=300, bbox_inches='tight')
+plt.close()
+plots.append(('plots/correlation_heatmap.png "width=800"', 'Heatmap showing correlations between all variables, with stronger colors indicating higher correlations.'))
+
+# 6. Composite Plot: Key Risk Factors (Static)
+plt.figure(figsize=(12, 10))
+plt.subplot(2, 2, 1)
+df['Diabetes'].value_counts().plot.pie(labels=['No', 'Yes'], autopct='%1.1f%%', colors=['#66b3ff', '#ff9999'])
+plt.title('Diabetes Prevalence')
+plt.ylabel('')
+plt.subplot(2, 2, 2)
+sns.violinplot(x='Diabetes', y='BMI', data=df)
+plt.title('BMI by Diabetes Status')
+plt.xlabel('Diabetes')
+plt.ylabel('BMI')
+plt.ylim(10, 60)
+plt.subplot(2, 2, 3)
+cross_tab = pd.crosstab(df['HighBP'], df['Diabetes'], normalize='index') * 100
+cross_tab.plot(kind='bar', stacked=True, color=['#66b3ff', '#ff9999'], ax=plt.gca())
+plt.title('HighBP vs. Diabetes')
+plt.xlabel('High Blood Pressure')
+plt.ylabel('Percentage')
+plt.subplot(2, 2, 4)
+sns.boxplot(x='Diabetes', y='Age', data=df)
+plt.title('Age by Diabetes Status')
+plt.xlabel('Diabetes')
+plt.ylabel('Age Category')
+plt.gca().set_yticks(list(age_mapping.keys()))
+plt.gca().set_yticklabels(list(age_mapping.values()), rotation=45)
+plt.tight_layout()
+plt.savefig('plots/composite_risk_factors.png', dpi=300, bbox_inches='tight')
+plt.close()
+plots.append(('plots/composite_risk_factors.png "width=800"', 'Composite plot summarizing key risk factors for diabetes (prevalence, BMI, HighBP, Age).'))
+
+# 7. Interactive Scatter Plot: BMI vs. Age (Updated Scaling)
+fig = px.scatter(df, x='Age_Label', y='BMI', color='Diabetes', title='BMI vs. Age by Diabetes Status',
+                 labels={'Age_Label': 'Age Group', 'BMI': 'Body Mass Index', 'Diabetes': 'Diabetes'},
+                 category_orders={'Diabetes': [0, 1], 'Age_Label': list(age_mapping.values())})
+fig.update_layout(width=800, height=500, yaxis_range=[10, 60], xaxis_title='Age Group', yaxis_title='BMI')
+fig.write_html('plots/bmi_vs_age.html')
+plots.append(('plots/bmi_vs_age.html', 'Interactive scatter plot showing BMI vs. Age, colored by diabetes status.'))
+
+# 8. Parallel Coordinates: Health Metrics by Diabetes Status (Interactive)
+fig = px.parallel_coordinates(df, dimensions=['BMI', 'Age', 'GenHlth', 'PhysHlth'],
+                              color='Diabetes',
+                              labels={'BMI': 'BMI', 'Age': 'Age Category', 'GenHlth': 'General Health', 'PhysHlth': 'Physical Health Days', 'Diabetes': 'Diabetes'},
+                              color_continuous_scale=px.colors.diverging.Tealrose)
+fig.update_layout(width=800, height=500, title='Parallel Coordinates: Health Metrics by Diabetes Status')
+fig.write_html('plots/parallel_coordinates.html')
+plots.append(('plots/parallel_coordinates.html', 'Interactive parallel coordinates plot showing relationships across BMI, Age, General Health, and Physical Health by diabetes status.'))
+
+# 9. BMI vs Diabetes Status (Line Chart, Interactive)
+diabetes_groups = df.groupby('Diabetes')['BMI'].mean().reset_index()
+fig = px.line(diabetes_groups, x='Diabetes', y='BMI', markers=True,
+              labels={'Diabetes': 'Diabetes Status (0 = No, 1 = Yes)', 'BMI': 'Average BMI'},
+              title='Average BMI by Diabetes Status')
+fig.update_traces(line_color='#ff9999', line_width=2, marker=dict(size=10))
+fig.update_layout(width=800, height=500, yaxis_range=[10, 60])
+fig.write_html('plots/bmi_vs_diabetes_line.html')
+plots.append(('plots/bmi_vs_diabetes_line.html', 'Interactive line chart showing the average BMI for non-diabetic and diabetic individuals.'))
+
+# Function to encode static images to base64
+def img_to_base64(img_path):
+    with open(img_path, 'rb') as img_file:
+        return base64.b64encode(img_file.read()).decode('utf-8')
+
+# Save plots list for HTML generation
+plots_with_base64 = []
+for path, desc in plots:
+    if path.endswith('.png "width=800"'):
+        path = path.replace(' "width=800"', '')
+        base64_str = img_to_base64(path)
+        plots_with_base64.append(('data:image/png;base64,' + base64_str, desc, 'image'))
+    else:
+        with open(path, 'r') as f:
+            html_content = f.read()
+            start = html_content.find('<div id=')
+            end = html_content.find('</body>')
+            plot_html = html_content[start:end]
+            plots_with_base64.append((plot_html, desc, 'html'))
+
+# Save the plots_with_base64 list for HTML generation
+with open('plots_with_base64.pkl', 'wb') as f:
+    import pickle
+    pickle.dump(plots_with_base64, f)
+
